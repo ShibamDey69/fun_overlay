@@ -9,6 +9,7 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell, GdkPixbuf
 import sys
 import signal
 from PIL import Image, ImageSequence
+import cairo
 
 class FloatingWidget(Gtk.Window):
     def __init__(self, gif_path):
@@ -72,32 +73,41 @@ class FloatingWidget(Gtk.Window):
         
         if not self.frames:
             sys.exit(1)
+
+        self.scaled_frames = {}
             
         self.frame_index = 0
         self.scale = 0.7
         self.base_width = self.frames[0].get_width()
         self.base_height = self.frames[0].get_height()
         
-        self.image = Gtk.Image()
-        self.event_box = Gtk.EventBox()
-        self.event_box.set_visible_window(False)
-        self.event_box.add(self.image)
+        self.drawing_area = Gtk.DrawingArea()
+        self.drawing_area.set_size_request(
+            int(self.base_width * self.scale),
+            int(self.base_height * self.scale)
+        )
+        self.drawing_area.connect("draw", self.on_draw)
         
         box = Gtk.Box()
-        box.pack_start(self.event_box, True, True, 0)
+        box.pack_start(self.drawing_area, True, True, 0)
         self.add(box)
         
-        self.event_box.add_events(
+        self.drawing_area.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK |
             Gdk.EventMask.POINTER_MOTION_MASK |
             Gdk.EventMask.BUTTON_RELEASE_MASK |
             Gdk.EventMask.SCROLL_MASK
         )
-        self.event_box.connect("button-press-event", self.on_press)
-        self.event_box.connect("motion-notify-event", self.on_motion)
-        self.event_box.connect("button-release-event", self.on_release)
-        self.event_box.connect("scroll-event", self.on_scroll)
-        
+        self.drawing_area.connect("button-press-event", self.on_press)
+        self.drawing_area.connect("motion-notify-event", self.on_motion)
+        self.drawing_area.connect("button-release-event", self.on_release)
+
+        self.scroll_controller = Gtk.EventControllerScroll.new(
+            self.drawing_area,
+            Gtk.EventControllerScrollFlags.VERTICAL
+        )
+        self.scroll_controller.connect("scroll", self.on_scroll)
+
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
@@ -147,13 +157,10 @@ class FloatingWidget(Gtk.Window):
             return True
         return False
     
-    def on_scroll(self, widget, event):
-        if event.direction == Gdk.ScrollDirection.UP:
-            self.scale *= 1.05
-        elif event.direction == Gdk.ScrollDirection.DOWN:
-            self.scale *= 0.95
-        
+    def on_scroll(self, _controller, _dx, dy):
+        self.scale *= 1 - dy / 30.0
         self.scale = max(0.2, min(self.scale, 3.0))
+        self.scaled_frames.clear()
         self.update_frame()
         return True
     
@@ -161,14 +168,28 @@ class FloatingWidget(Gtk.Window):
         self.frame_index = (self.frame_index + 1) % len(self.frames)
         self.update_frame()
         return True
-    
+
+    def on_draw(self, _widget, cr):
+        Gdk.cairo_set_source_pixbuf(cr, self.scaled_frames[self.frame_index], 0, 0)
+        cr.paint()
+        return False
+
     def update_frame(self):
-        pixbuf = self.frames[self.frame_index]
         w = int(self.base_width * self.scale)
         h = int(self.base_height * self.scale)
-        scaled = pixbuf.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
-        self.image.set_from_pixbuf(scaled)
-        self.set_size_request(w, h)
+
+        cache_key = self.frame_index
+        if cache_key not in self.scaled_frames:
+            surface = cairo.ImageSurface(cairo.Format.ARGB32, w, h)
+            cr = cairo.Context(surface)
+            cr.scale(self.scale, self.scale)
+            Gdk.cairo_set_source_pixbuf(cr, self.frames[cache_key], 0, 0)
+            cr.paint()
+            self.scaled_frames[cache_key] = Gdk.pixbuf_get_from_surface(surface, 0, 0, w, h)
+        scaled = self.scaled_frames[cache_key]
+
+        self.drawing_area.set_size_request(scaled.get_width(), scaled.get_height())
+        self.drawing_area.queue_draw()
 
 def main():
     if len(sys.argv) != 2:

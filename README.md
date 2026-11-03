@@ -11,7 +11,7 @@ cd fun_overlay
 
 Dependencies (Arch):
 ```sh
-sudo pacman -S python-gobject python-pillow gtk-layer-shell
+sudo pacman -S python-gobject python-pillow gtk-layer-shell python-cairo
 ```
 
 ## Run
